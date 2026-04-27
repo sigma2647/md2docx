@@ -256,10 +256,9 @@ class Program
     static void AddDocumentSettings(MainDocumentPart mainPart)
     {
         var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
-        settingsPart.Settings = new Settings(
-            new UpdateFieldsOnOpen { Val = true }
-        );
+        settingsPart.Settings = new Settings();
     }
+
 
     // =========================================================================
     // Markdown 解析器
