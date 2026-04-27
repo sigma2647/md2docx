@@ -54,10 +54,46 @@ ParseMarkdown
 
 
 
-## build
+## Build & Install
 
+### 方法 1：Makefile（推荐）
 
+```bash
+# 编译 + 安装到 ~/.local/bin
+make install
 
+# 仅快速编译（framework-dependent，开发调试用）
+make build
+
+# 清理构建产物
+make clean
 ```
-dotnet publish -c Release --self-contained false
+
+### 方法 2：build.sh
+
+```bash
+# 编译 + 安装到 ~/.local/bin
+./build.sh install
+
+# 仅快速编译
+./build.sh build
+
+# 清理
+./build.sh clean
 ```
+
+### 方法 3：手动命令
+
+```bash
+# 单文件自包含发布（产生唯一可执行文件，零依赖）
+dotnet publish -c Release -r linux-x64 \
+  --self-contained true \
+  -p:PublishSingleFile=true
+
+# 复制到 PATH
+cp bin/Release/net10.0/linux-x64/publish/md2docx ~/.local/bin/
+chmod +x ~/.local/bin/md2docx
+```
+
+> ⚠️ **注意**：不要对 framework-dependent 的发布结果使用 `ln -s` 软链接到 PATH。运行时会在链接所在目录（如 `~/.local/bin/`）查找 DLL，导致文件丢失错误。单文件自包含（`-p:PublishSingleFile=true`）发布结果可直接复制或软链接到任意位置。
+
