@@ -226,7 +226,7 @@ class Program
             ),
             new StyleRunProperties(
                 new RunFonts { Ascii = "黑体", HighAnsi = "黑体", EastAsia = "黑体", ComplexScript = "黑体" },
-                new FontSize { Val = "24" },
+                new FontSize { Val = "20" },
                 new Color { Val = BLACK }
             )
         ) { Type = StyleValues.Paragraph, StyleId = "Caption" });
