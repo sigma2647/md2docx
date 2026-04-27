@@ -55,6 +55,9 @@ ParseMarkdown
 
 
 ## build
+
+
+
 ```
-dotnet add package DocumentFormat.OpenXml --version 3.1.0
+dotnet publish -c Release --self-contained false
 ```

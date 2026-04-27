@@ -1,6 +1,3 @@
-#:package DocumentFormat.OpenXml@3.1.0
-#:package System.CommandLine@2.0.0-beta4.22272.1
-#:property TargetFramework=net10.0
 // MD to DOCX Converter - 精确匹配模板样式
 // 标题1-5: 黑体四号(14pt), 正文: 仿宋四号, 所有字体黑色
 // 图片: 黑色边框0.75磅
