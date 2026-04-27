@@ -535,7 +535,7 @@ class Program
 
         capPara.Append(new Run(
             new RunProperties(new RunFonts { Ascii = "黑体", HighAnsi = "黑体", EastAsia = "黑体", ComplexScript = "黑体" }),
-            new Text($" - {caption}") { Space = SpaceProcessingModeValues.Preserve }
+            new Text($" {caption}") { Space = SpaceProcessingModeValues.Preserve }
         ));
         body.Append(capPara);
     }
@@ -573,7 +573,7 @@ class Program
                 new RunProperties(
                     new RunFonts { Ascii = "黑体", HighAnsi = "黑体", EastAsia = "黑体", ComplexScript = "黑体" }
                 ),
-                new Text($" - {captionText}") { Space = SpaceProcessingModeValues.Preserve }
+                new Text($" {captionText}") { Space = SpaceProcessingModeValues.Preserve }
             ));
         }
 
@@ -619,7 +619,7 @@ class Program
             headerRow.Append(new TableCell(
                 new TableCellProperties(
                     new TableCellWidth { Width = colWidth.ToString(), Type = TableWidthUnitValues.Dxa },
-                    new Shading { Val = ShadingPatternValues.Clear, Fill = "000000" },
+                    // new Shading { Val = ShadingPatternValues.Clear, Fill = "000000" },
                     new TableCellVerticalAlignment { Val = TableVerticalAlignmentValues.Center }
                 ),
                 new Paragraph(
@@ -629,9 +629,8 @@ class Program
                     ),
                     new Run(
                         new RunProperties(
-                            new Bold(),
-                            new Color { Val = "FFFFFF" },
-                            new RunFonts { Ascii = "黑体", HighAnsi = "黑体", EastAsia = "黑体", ComplexScript = "黑体" },
+                            // new Bold(),  加粗
+                            new RunFonts { Ascii = "仿宋", HighAnsi = "仿宋", EastAsia = "仿宋", ComplexScript = "仿宋" },
                             new FontSize { Val = "28" }
                         ),
                         new Text(h.Trim())
@@ -651,8 +650,8 @@ class Program
                 var cellProps = new TableCellProperties(
                     new TableCellWidth { Width = colWidth.ToString(), Type = TableWidthUnitValues.Dxa }
                 );
-                if (altBg)
-                    cellProps.Append(new Shading { Val = ShadingPatternValues.Clear, Fill = "F5F5F5" });
+                // if (altBg)
+                //     cellProps.Append(new Shading { Val = ShadingPatternValues.Clear, Fill = "F5F5F5" });
 
                 dataRow.Append(new TableCell(
                     cellProps,
