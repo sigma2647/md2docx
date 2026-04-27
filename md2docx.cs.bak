@@ -528,7 +528,7 @@ class Program
         ));
 
         capPara.Append(new Run(new FieldChar { FieldCharType = FieldCharValues.Begin }));
-        capPara.Append(new Run(new FieldCode(" SEQ 图 \\* ARABIC ") { Space = SpaceProcessingModeValues.Preserve }));
+        capPara.Append(new Run(new FieldCode(" SEQ Figure \\* ARABIC ") { Space = SpaceProcessingModeValues.Preserve }));
         capPara.Append(new Run(new FieldChar { FieldCharType = FieldCharValues.Separate }));
         capPara.Append(new Run(new Text(_figCounter.ToString())));
         capPara.Append(new Run(new FieldChar { FieldCharType = FieldCharValues.End }));
@@ -537,12 +537,6 @@ class Program
             new RunProperties(new RunFonts { Ascii = "黑体", HighAnsi = "黑体", EastAsia = "黑体", ComplexScript = "黑体" }),
             new Text($" {caption}") { Space = SpaceProcessingModeValues.Preserve }
         ));
-
-        // 添加 _GoBack 书签（兼容 nre.docx 交叉引用）
-        var goBackId = (++_bookmarkId).ToString();
-        capPara.Append(new BookmarkStart { Id = goBackId, Name = "_GoBack" });
-        capPara.Append(new BookmarkEnd { Id = goBackId });
-
         body.Append(capPara);
     }
 
@@ -567,7 +561,7 @@ class Program
 
         // SEQ 自动编号域
         capPara.Append(new Run(new FieldChar { FieldCharType = FieldCharValues.Begin }));
-        capPara.Append(new Run(new FieldCode(" SEQ 表 \\* ARABIC ") { Space = SpaceProcessingModeValues.Preserve }));
+        capPara.Append(new Run(new FieldCode(" SEQ Table \\* ARABIC ") { Space = SpaceProcessingModeValues.Preserve }));
         capPara.Append(new Run(new FieldChar { FieldCharType = FieldCharValues.Separate }));
         capPara.Append(new Run(new Text(_tableCounter.ToString())));
         capPara.Append(new Run(new FieldChar { FieldCharType = FieldCharValues.End }));
@@ -582,11 +576,6 @@ class Program
                 new Text($" {captionText}") { Space = SpaceProcessingModeValues.Preserve }
             ));
         }
-
-        // 添加 _GoBack 书签（兼容 nre.docx 交叉引用）
-        var goBackId = (++_bookmarkId).ToString();
-        capPara.Append(new BookmarkStart { Id = goBackId, Name = "_GoBack" });
-        capPara.Append(new BookmarkEnd { Id = goBackId });
 
         body.Append(capPara);
     }
