@@ -3,4 +3,4 @@ obj/
 *.png
 *.docx#
 *.docx
-*.md
+/input.md
