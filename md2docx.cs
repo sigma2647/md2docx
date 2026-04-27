@@ -31,108 +31,6 @@ class Program
     private static int _tableCounter = 0;
     private static int _bookmarkId = 0;
 
-    // =========================================================================
-    // CLI 参数解析
-    // =========================================================================
-    class CliOptions
-    {
-        public string? InputFile;       // null 表示从 stdin 读取
-        public string? OutputFile;      // null 表示自动推导
-        public string? BaseDir;         // 图片基准目录
-        public bool Force;              // 强制覆盖
-    }
-
-    static void PrintHelp()
-    {
-        Console.WriteLine($"""
-            md2docx v{VERSION} - Markdown to DOCX Converter
-
-            Usage:
-              md2docx [options] [input.md]
-              cat input.md | md2docx [options]
-
-            Arguments:
-              input.md          Input Markdown file. Omit to read from stdin.
-
-            Options:
-              -o, --output <file>     Output .docx path.
-                                      Default: same name as input (.docx), or
-                                      'output.docx' when reading from stdin.
-              --base-dir <dir>        Base directory for resolving image paths.
-                                      Default: directory of input file, or cwd for stdin.
-              -f, --force             Overwrite output file if it already exists.
-              -h, --help              Show this help message and exit.
-              --version               Show version and exit.
-
-            Conflict resolution (without --force):
-              If the output file already exists, a numeric suffix is appended:
-              report.docx → report_1.docx → report_2.docx → ...
-
-            Examples:
-              md2docx report.md
-              md2docx report.md -o draft.docx
-              md2docx report.md --base-dir ./assets -f
-              cat report.md | md2docx -o out.docx --base-dir ./assets
-              cat report.md | md2docx
-            """);
-    }
-
-    static CliOptions ParseArgs(string[] args)
-    {
-        var opts = new CliOptions();
-        int i = 0;
-
-        while (i < args.Length)
-        {
-            var a = args[i];
-            switch (a)
-            {
-                case "-h":
-                case "--help":
-                    PrintHelp();
-                    Environment.Exit(0);
-                    break;
-
-                case "--version":
-                    Console.WriteLine($"md2docx v{VERSION}");
-                    Environment.Exit(0);
-                    break;
-
-                case "-f":
-                case "--force":
-                    opts.Force = true;
-                    i++;
-                    break;
-
-                case "-o":
-                case "--output":
-                    if (i + 1 >= args.Length)
-                        Die($"Flag '{a}' requires an argument.");
-                    opts.OutputFile = args[++i];
-                    i++;
-                    break;
-
-                case "--base-dir":
-                    if (i + 1 >= args.Length)
-                        Die($"Flag '{a}' requires an argument.");
-                    opts.BaseDir = args[++i];
-                    i++;
-                    break;
-
-                default:
-                    if (a.StartsWith("-"))
-                        Die($"Unknown flag: '{a}'. Use --help for usage.");
-                    if (opts.InputFile != null)
-                        Die("Multiple input files specified. Only one input is supported.");
-                    opts.InputFile = a;
-                    i++;
-                    break;
-            }
-        }
-
-        return opts;
-    }
-
     static void Die(string msg, int code = 1)
     {
         Console.Error.WriteLine($"Error: {msg}");
@@ -161,14 +59,54 @@ class Program
     }
 
     // =========================================================================
-    // 入口
+    // 入口 (使用 System.CommandLine 重构)
     // =========================================================================
-    static void Main(string[] args)
+    static int Main(string[] args)
     {
-        var opts = ParseArgs(args);
+        // 1. 定义参数 (Argument: 位置参数，无需前缀)
+        var inputArgument = new Argument<string?>(
+            name: "input.md",
+            description: "Input Markdown file. Omit to read from stdin.",
+            getDefaultValue: () => null);
 
-        // --- 判断是否从 stdin 读取 ---
-        bool fromStdin = opts.InputFile == null;
+        // 2. 定义选项 (Option: 命名参数，带前缀)
+        var outputOption = new Option<string?>(
+            aliases: new[] { "-o", "--output" },
+            description: "Output .docx path.\nDefault: same name as input (.docx), or 'output.docx' when reading from stdin.");
+
+        var baseDirOption = new Option<string?>(
+            name: "--base-dir",
+            description: "Base directory for resolving image paths.\nDefault: directory of input file, or cwd for stdin.");
+
+        var forceOption = new Option<bool>(
+            aliases: new[] { "-f", "--force" },
+            description: "Overwrite output file if it already exists.");
+
+        // 3. 配置根命令
+        var rootCommand = new RootCommand($"md2docx v{VERSION} - Markdown to DOCX Converter")
+        {
+            inputArgument,
+            outputOption,
+            baseDirOption,
+            forceOption
+        };
+
+        // 4. 绑定执行逻辑 (将解析后的强类型参数传递给业务方法)
+        rootCommand.SetHandler((string? inputFile, string? outputFile, string? baseDir, bool force) =>
+        {
+            RunConverter(inputFile, outputFile, baseDir, force);
+        }, inputArgument, outputOption, baseDirOption, forceOption);
+
+        // 5. 调用并返回退出码 (自动接管 -h, --help, --version)
+        return rootCommand.Invoke(args);
+    }
+
+    /// <summary>
+    /// 原来的 Main 方法中的核心业务逻辑提取到这里
+    /// </summary>
+    static void RunConverter(string? inputFile, string? outputFileOpt, string? baseDirOpt, bool force)
+    {
+        bool fromStdin = inputFile == null;
 
         string mdText;
         string baseDir;
@@ -176,39 +114,37 @@ class Program
 
         if (fromStdin)
         {
-            // 检测是否有管道输入，避免在交互终端挂起
             if (Console.IsInputRedirected)
             {
                 mdText = Console.In.ReadToEnd();
             }
             else
             {
-                // 交互终端：提示用户，按 Ctrl+D / Ctrl+Z 结束
                 Console.Error.WriteLine("Reading from stdin (end with Ctrl+D / Ctrl+Z):");
                 mdText = Console.In.ReadToEnd();
             }
 
-            baseDir       = opts.BaseDir ?? Directory.GetCurrentDirectory();
-            desiredOutput = opts.OutputFile ?? Path.Combine(Directory.GetCurrentDirectory(), "output.docx");
+            baseDir       = baseDirOpt ?? Directory.GetCurrentDirectory();
+            desiredOutput = outputFileOpt ?? Path.Combine(Directory.GetCurrentDirectory(), "output.docx");
         }
         else
         {
-            var inputPath = Path.GetFullPath(opts.InputFile!);
+            var inputPath = Path.GetFullPath(inputFile!);
             if (!File.Exists(inputPath))
                 Die($"Input file not found: {inputPath}");
 
             mdText        = File.ReadAllText(inputPath);
-            baseDir       = opts.BaseDir != null
-                                ? Path.GetFullPath(opts.BaseDir)
+            baseDir       = baseDirOpt != null
+                                ? Path.GetFullPath(baseDirOpt)
                                 : Path.GetDirectoryName(inputPath)!;
-            desiredOutput = opts.OutputFile
+            desiredOutput = outputFileOpt
                             ?? Path.ChangeExtension(inputPath, ".docx");
         }
 
         if (!Directory.Exists(baseDir))
             Die($"Base directory not found: {baseDir}");
 
-        var outPath = ResolveOutputPath(Path.GetFullPath(desiredOutput), opts.Force);
+        var outPath = ResolveOutputPath(Path.GetFullPath(desiredOutput), force);
 
         // --- 生成 DOCX ---
         using var doc = WordprocessingDocument.Create(outPath, WordprocessingDocumentType.Document);
@@ -231,7 +167,7 @@ class Program
         Console.WriteLine($"Generated : {outPath}");
         Console.WriteLine($"Size      : {info.Length:N0} bytes");
 
-        if (opts.Force && desiredOutput != outPath)
+        if (force && desiredOutput != outPath)
             Console.WriteLine("(overwritten)");
         else if (desiredOutput != outPath)
             Console.WriteLine($"Note      : '{Path.GetFileName(desiredOutput)}' already existed → saved as '{Path.GetFileName(outPath)}'");
@@ -605,7 +541,6 @@ class Program
 
         body.Append(new Paragraph(
             new ParagraphProperties(
-                new KeepNext(),
                 new Justification { Val = JustificationValues.Center },
                 new SpacingBetweenLines { Before = "0", After = "0" }
             ),
