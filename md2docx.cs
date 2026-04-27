@@ -483,7 +483,7 @@ class Program
 
         var inline = new DW.Inline(
             new DW.Extent { Cx = cx, Cy = cy },
-            new DW.EffectExtent { LeftEdge = 0, TopEdge = 0, RightEdge = 0, BottomEdge = 0 },
+            new DW.EffectExtent { LeftEdge = borderWidth, TopEdge = borderWidth, RightEdge = borderWidth, BottomEdge = borderWidth },
             new DW.DocProperties { Id = prId, Name = $"Fig{_figCounter}" },
             new DW.NonVisualGraphicFrameDrawingProperties(new A.GraphicFrameLocks { NoChangeAspect = true }),
             graphic
