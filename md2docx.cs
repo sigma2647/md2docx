@@ -1,14 +1,15 @@
 #:package DocumentFormat.OpenXml@3.1.0
+#:package System.CommandLine@2.0.0-beta4.22272.1
 #:property TargetFramework=net10.0
 // MD to DOCX Converter - 精确匹配模板样式
 // 标题1-5: 黑体四号(14pt), 正文: 仿宋四号, 所有字体黑色
 // 图片: 黑色边框0.75磅
 
-
 using System;
 using System.IO;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
+using System.CommandLine;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
@@ -22,63 +23,228 @@ class Program
 {
     private const int A4W = 11906;
     private const int A4H = 16838;
-    private const string BLACK = "000000";  // 所有字体统一黑色
+    private const string BLACK = "000000";
+    private const string VERSION = "1.1.0";
 
     private static uint _docPrId = 1;
     private static int _figCounter = 0;
     private static int _tableCounter = 0;
     private static int _bookmarkId = 0;
 
-    static void Main(string[] args)
+    // =========================================================================
+    // CLI 参数解析
+    // =========================================================================
+    class CliOptions
     {
-        string mdPath = args.Length > 0 ? args[0] : "input.md";
-        string outPath = args.Length > 1 ? args[1] : "output.docx";
+        public string? InputFile;       // null 表示从 stdin 读取
+        public string? OutputFile;      // null 表示自动推导
+        public string? BaseDir;         // 图片基准目录
+        public bool Force;              // 强制覆盖
+    }
 
-        if (!File.Exists(mdPath))
+    static void PrintHelp()
+    {
+        Console.WriteLine($"""
+            md2docx v{VERSION} - Markdown to DOCX Converter
+
+            Usage:
+              md2docx [options] [input.md]
+              cat input.md | md2docx [options]
+
+            Arguments:
+              input.md          Input Markdown file. Omit to read from stdin.
+
+            Options:
+              -o, --output <file>     Output .docx path.
+                                      Default: same name as input (.docx), or
+                                      'output.docx' when reading from stdin.
+              --base-dir <dir>        Base directory for resolving image paths.
+                                      Default: directory of input file, or cwd for stdin.
+              -f, --force             Overwrite output file if it already exists.
+              -h, --help              Show this help message and exit.
+              --version               Show version and exit.
+
+            Conflict resolution (without --force):
+              If the output file already exists, a numeric suffix is appended:
+              report.docx → report_1.docx → report_2.docx → ...
+
+            Examples:
+              md2docx report.md
+              md2docx report.md -o draft.docx
+              md2docx report.md --base-dir ./assets -f
+              cat report.md | md2docx -o out.docx --base-dir ./assets
+              cat report.md | md2docx
+            """);
+    }
+
+    static CliOptions ParseArgs(string[] args)
+    {
+        var opts = new CliOptions();
+        int i = 0;
+
+        while (i < args.Length)
         {
-            Console.WriteLine($"Error: Markdown file not found: {mdPath}");
-            Console.WriteLine("Usage: dotnet run -- <input.md> [output.docx]");
-            Environment.Exit(1);
+            var a = args[i];
+            switch (a)
+            {
+                case "-h":
+                case "--help":
+                    PrintHelp();
+                    Environment.Exit(0);
+                    break;
+
+                case "--version":
+                    Console.WriteLine($"md2docx v{VERSION}");
+                    Environment.Exit(0);
+                    break;
+
+                case "-f":
+                case "--force":
+                    opts.Force = true;
+                    i++;
+                    break;
+
+                case "-o":
+                case "--output":
+                    if (i + 1 >= args.Length)
+                        Die($"Flag '{a}' requires an argument.");
+                    opts.OutputFile = args[++i];
+                    i++;
+                    break;
+
+                case "--base-dir":
+                    if (i + 1 >= args.Length)
+                        Die($"Flag '{a}' requires an argument.");
+                    opts.BaseDir = args[++i];
+                    i++;
+                    break;
+
+                default:
+                    if (a.StartsWith("-"))
+                        Die($"Unknown flag: '{a}'. Use --help for usage.");
+                    if (opts.InputFile != null)
+                        Die("Multiple input files specified. Only one input is supported.");
+                    opts.InputFile = a;
+                    i++;
+                    break;
+            }
         }
 
-        string mdText = File.ReadAllText(mdPath);
-        var mdDir = Path.GetDirectoryName(Path.GetFullPath(mdPath)) ?? ".";
+        return opts;
+    }
 
+    static void Die(string msg, int code = 1)
+    {
+        Console.Error.WriteLine($"Error: {msg}");
+        Environment.Exit(code);
+    }
+
+    /// <summary>
+    /// 解析最终的输出路径，处理冲突（递增后缀）或强制覆盖。
+    /// </summary>
+    static string ResolveOutputPath(string desired, bool force)
+    {
+        if (force || !File.Exists(desired))
+            return desired;
+
+        // 冲突：追加 _1、_2 …
+        var dir  = Path.GetDirectoryName(desired) ?? ".";
+        var stem = Path.GetFileNameWithoutExtension(desired);
+        var ext  = Path.GetExtension(desired);   // ".docx"
+
+        for (int n = 1; ; n++)
+        {
+            var candidate = Path.Combine(dir, $"{stem}_{n}{ext}");
+            if (!File.Exists(candidate))
+                return candidate;
+        }
+    }
+
+    // =========================================================================
+    // 入口
+    // =========================================================================
+    static void Main(string[] args)
+    {
+        var opts = ParseArgs(args);
+
+        // --- 判断是否从 stdin 读取 ---
+        bool fromStdin = opts.InputFile == null;
+
+        string mdText;
+        string baseDir;
+        string desiredOutput;
+
+        if (fromStdin)
+        {
+            // 检测是否有管道输入，避免在交互终端挂起
+            if (Console.IsInputRedirected)
+            {
+                mdText = Console.In.ReadToEnd();
+            }
+            else
+            {
+                // 交互终端：提示用户，按 Ctrl+D / Ctrl+Z 结束
+                Console.Error.WriteLine("Reading from stdin (end with Ctrl+D / Ctrl+Z):");
+                mdText = Console.In.ReadToEnd();
+            }
+
+            baseDir       = opts.BaseDir ?? Directory.GetCurrentDirectory();
+            desiredOutput = opts.OutputFile ?? Path.Combine(Directory.GetCurrentDirectory(), "output.docx");
+        }
+        else
+        {
+            var inputPath = Path.GetFullPath(opts.InputFile!);
+            if (!File.Exists(inputPath))
+                Die($"Input file not found: {inputPath}");
+
+            mdText        = File.ReadAllText(inputPath);
+            baseDir       = opts.BaseDir != null
+                                ? Path.GetFullPath(opts.BaseDir)
+                                : Path.GetDirectoryName(inputPath)!;
+            desiredOutput = opts.OutputFile
+                            ?? Path.ChangeExtension(inputPath, ".docx");
+        }
+
+        if (!Directory.Exists(baseDir))
+            Die($"Base directory not found: {baseDir}");
+
+        var outPath = ResolveOutputPath(Path.GetFullPath(desiredOutput), opts.Force);
+
+        // --- 生成 DOCX ---
         using var doc = WordprocessingDocument.Create(outPath, WordprocessingDocumentType.Document);
         var mainPart = doc.AddMainDocumentPart();
         mainPart.Document = new Document(new Body());
         var body = mainPart.Document.Body!;
 
-        // 1. 添加模板样式
         AddStyles(mainPart);
-
-        // 2. 添加文档设置
         AddDocumentSettings(mainPart);
+        ParseMarkdown(body, mainPart, mdText, baseDir);
 
-        // 3. 解析 Markdown
-        ParseMarkdown(body, mainPart, mdText, mdDir);
-
-        // 4. 页面设置
         body.Append(new SectionProperties(
-            new PageSize { Width = (UInt32Value)(uint)A4W, Height = (UInt32Value)(uint)A4H },
+            new PageSize  { Width = (UInt32Value)(uint)A4W, Height = (UInt32Value)(uint)A4H },
             new PageMargin { Top = 1440, Right = 1800, Bottom = 1440, Left = 1800, Header = 720, Footer = 720 }
         ));
 
         doc.Save();
-        Console.WriteLine($"Generated: {Path.GetFullPath(outPath)}");
-        Console.WriteLine($"Size: {new FileInfo(outPath).Length} bytes");
+
+        var info = new FileInfo(outPath);
+        Console.WriteLine($"Generated : {outPath}");
+        Console.WriteLine($"Size      : {info.Length:N0} bytes");
+
+        if (opts.Force && desiredOutput != outPath)
+            Console.WriteLine("(overwritten)");
+        else if (desiredOutput != outPath)
+            Console.WriteLine($"Note      : '{Path.GetFileName(desiredOutput)}' already existed → saved as '{Path.GetFileName(outPath)}'");
     }
 
     // =========================================================================
-    // 样式定义 - 精确匹配模板
+    // 样式定义
     // =========================================================================
     static void AddStyles(MainDocumentPart mainPart)
     {
         var sp = mainPart.AddNewPart<StyleDefinitionsPart>();
         sp.Styles = new Styles();
 
-        // ---- Normal (默认段落字体) ----
-        // 模板: widowControl="0", 两端对齐, 段前段后0磅
         sp.Styles.Append(new Style(
             new StyleName { Val = "Normal" },
             new StyleParagraphProperties(
@@ -88,8 +254,6 @@ class Program
             )
         ) { Type = StyleValues.Paragraph, StyleId = "Normal", Default = true });
 
-        // ---- Heading1 ----
-        // 模板: 黑体, sz=28, szCs=28, line=360 auto, keepNext/keepLines, outline=0, bCs, kern=44
         sp.Styles.Append(new Style(
             new StyleName { Val = "heading 1" },
             new BasedOn { Val = "Normal" },
@@ -110,8 +274,6 @@ class Program
             )
         ) { Type = StyleValues.Paragraph, StyleId = "Heading1" });
 
-        // ---- Heading2 ----
-        // 模板: 黑体, sz=28, szCs=28, line=360 auto, keepNext/keepLines, outline=1, bCs
         sp.Styles.Append(new Style(
             new StyleName { Val = "heading 2" },
             new BasedOn { Val = "Normal" },
@@ -131,8 +293,6 @@ class Program
             )
         ) { Type = StyleValues.Paragraph, StyleId = "Heading2" });
 
-        // ---- Heading3 ----
-        // 模板: 黑体, sz=28, szCs=32, line=360 auto, keepNext/keepLines, wordWrap=0, outline=2, bCs
         sp.Styles.Append(new Style(
             new StyleName { Val = "heading 3" },
             new BasedOn { Val = "Normal" },
@@ -148,13 +308,11 @@ class Program
                 new RunFonts { Ascii = "黑体", HighAnsi = "黑体", EastAsia = "黑体", ComplexScript = "黑体" },
                 new BoldComplexScript(),
                 new FontSize { Val = "28" },
-                new FontSizeComplexScript { Val = "32" },
+                new FontSizeComplexScript { Val = "28" },
                 new Color { Val = BLACK }
             )
         ) { Type = StyleValues.Paragraph, StyleId = "Heading3" });
 
-        // ---- Heading4 ----
-        // 模板: 黑体, sz=28, szCs=28, line=360 auto, keepNext/keepLines, wordWrap=0, outline=3
         sp.Styles.Append(new Style(
             new StyleName { Val = "heading 4" },
             new BasedOn { Val = "Normal" },
@@ -174,8 +332,6 @@ class Program
             )
         ) { Type = StyleValues.Paragraph, StyleId = "Heading4" });
 
-        // ---- Heading5 ----
-        // 模板: 黑体, sz=28, szCs=28, line=360 auto, keepNext/keepLines, wordWrap=0, outline=4
         sp.Styles.Append(new Style(
             new StyleName { Val = "heading 5" },
             new BasedOn { Val = "Normal" },
@@ -195,9 +351,6 @@ class Program
             )
         ) { Type = StyleValues.Paragraph, StyleId = "Heading5" });
 
-        // ---- 正文样式 (No Spacing / BodyText) ----
-        // 模板: 仿宋, sz=28, szCs=28, widowControl=0, wordWrap=0
-        // firstLineChars=200 firstLine=200, 两端对齐, 段前段后0磅
         sp.Styles.Append(new Style(
             new StyleName { Val = "Body Text" },
             new Aliases { Val = "正文" },
@@ -216,7 +369,6 @@ class Program
             )
         ) { Type = StyleValues.Paragraph, StyleId = "BodyText" });
 
-        // ---- 题注样式 ----
         sp.Styles.Append(new Style(
             new StyleName { Val = "Caption" },
             new BasedOn { Val = "Normal" },
@@ -231,23 +383,22 @@ class Program
             )
         ) { Type = StyleValues.Paragraph, StyleId = "Caption" });
 
-        // ---- 表格样式 ----
         sp.Styles.Append(new Style(
             new StyleName { Val = "Table Grid" },
             new StyleTableProperties(
                 new TableBorders(
-                    new TopBorder { Val = BorderValues.Single, Size = 4, Color = "000000" },
+                    new TopBorder    { Val = BorderValues.Single, Size = 4, Color = "000000" },
                     new BottomBorder { Val = BorderValues.Single, Size = 4, Color = "000000" },
-                    new LeftBorder { Val = BorderValues.Single, Size = 4, Color = "000000" },
-                    new RightBorder { Val = BorderValues.Single, Size = 4, Color = "000000" },
+                    new LeftBorder   { Val = BorderValues.Single, Size = 4, Color = "000000" },
+                    new RightBorder  { Val = BorderValues.Single, Size = 4, Color = "000000" },
                     new InsideHorizontalBorder { Val = BorderValues.Single, Size = 4, Color = "000000" },
-                    new InsideVerticalBorder { Val = BorderValues.Single, Size = 4, Color = "000000" }
+                    new InsideVerticalBorder   { Val = BorderValues.Single, Size = 4, Color = "000000" }
                 ),
                 new TableCellMarginDefault(
-                    new TopMargin { Width = "60", Type = TableWidthUnitValues.Dxa },
+                    new TopMargin    { Width = "60", Type = TableWidthUnitValues.Dxa },
                     new BottomMargin { Width = "60", Type = TableWidthUnitValues.Dxa },
-                    new StartMargin { Width = "80", Type = TableWidthUnitValues.Dxa },
-                    new EndMargin { Width = "80", Type = TableWidthUnitValues.Dxa }
+                    new StartMargin  { Width = "80", Type = TableWidthUnitValues.Dxa },
+                    new EndMargin    { Width = "80", Type = TableWidthUnitValues.Dxa }
                 )
             )
         ) { Type = StyleValues.Table, StyleId = "TableGrid" });
@@ -259,7 +410,6 @@ class Program
         settingsPart.Settings = new Settings();
     }
 
-
     // =========================================================================
     // Markdown 解析器
     // =========================================================================
@@ -270,14 +420,10 @@ class Program
 
         while (i < lines.Length)
         {
-            var line = lines[i];
+            var line    = lines[i];
             var trimmed = line.TrimStart();
 
-            if (string.IsNullOrWhiteSpace(line))
-            {
-                i++;
-                continue;
-            }
+            if (string.IsNullOrWhiteSpace(line)) { i++; continue; }
 
             // 标题
             if (trimmed.StartsWith("#"))
@@ -286,8 +432,7 @@ class Program
                 while (level < trimmed.Length && trimmed[level] == '#') level++;
                 if (level <= 5 && trimmed.Length > level && trimmed[level] == ' ')
                 {
-                    var text = trimmed.Substring(level + 1).Trim();
-                    body.Append(CreateHeading(text, level));
+                    body.Append(CreateHeading(trimmed.Substring(level + 1).Trim(), level));
                     i++;
                     continue;
                 }
@@ -298,9 +443,7 @@ class Program
             {
                 var imgInfo = ParseImageTag(trimmed);
                 if (imgInfo != null)
-                {
                     AddImageWithCaption(body, mainPart, Path.Combine(baseDir, imgInfo.Path), imgInfo.Alt);
-                }
                 i++;
                 continue;
             }
@@ -311,29 +454,24 @@ class Program
                 ParseTable(body, lines, i, out int endIdx);
                 i = endIdx;
 
-                // 检测紧跟表格后的可选题注行，格式：[表格说明文字]
                 string tableCaption = "";
                 if (i < lines.Length)
                 {
-                    var nextLine = lines[i].Trim();
-                    var capMatch = Regex.Match(nextLine, @"^\[(.+)\]$");
-                    if (capMatch.Success)
-                    {
-                        tableCaption = capMatch.Groups[1].Value;
-                        i++;
-                    }
+                    var capMatch = Regex.Match(lines[i].Trim(), @"^\[(.+)\]$");
+                    if (capMatch.Success) { tableCaption = capMatch.Groups[1].Value; i++; }
                 }
                 AppendTableCaption(body, tableCaption);
                 continue;
             }
 
-            // 普通段落
+            // 普通段落（合并连续非空行）
             var paraText = line.Trim();
             i++;
-            while (i < lines.Length && !string.IsNullOrWhiteSpace(lines[i]) &&
-                   !lines[i].TrimStart().StartsWith("#") &&
-                   !lines[i].TrimStart().StartsWith("|") &&
-                   !(lines[i].TrimStart().StartsWith("![") && lines[i].Contains("](")))
+            while (i < lines.Length
+                   && !string.IsNullOrWhiteSpace(lines[i])
+                   && !lines[i].TrimStart().StartsWith("#")
+                   && !lines[i].TrimStart().StartsWith("|")
+                   && !(lines[i].TrimStart().StartsWith("![") && lines[i].Contains("](")))
             {
                 paraText += lines[i].Trim();
                 i++;
@@ -344,13 +482,10 @@ class Program
 
     static Paragraph CreateHeading(string text, int level)
     {
-        var styleId = $"Heading{level}";
         var bmkId = (++_bookmarkId).ToString();
-        var bmkName = $"_Toc{_bookmarkId:D3}";
-
         return new Paragraph(
-            new ParagraphProperties(new ParagraphStyleId { Val = styleId }),
-            new BookmarkStart { Id = bmkId, Name = bmkName },
+            new ParagraphProperties(new ParagraphStyleId { Val = $"Heading{level}" }),
+            new BookmarkStart { Id = bmkId, Name = $"_Toc{_bookmarkId:D3}" },
             new Run(new Text(text)),
             new BookmarkEnd { Id = bmkId }
         );
@@ -361,9 +496,7 @@ class Program
         var para = new Paragraph(
             new ParagraphProperties(new ParagraphStyleId { Val = "BodyText" })
         );
-
-        var parts = ParseInlineStyles(text);
-        foreach (var part in parts)
+        foreach (var part in ParseInlineStyles(text))
         {
             var rpr = new RunProperties(
                 new RunFonts { Ascii = "仿宋", HighAnsi = "仿宋", EastAsia = "仿宋", ComplexScript = "仿宋" },
@@ -371,11 +504,10 @@ class Program
                 new FontSizeComplexScript { Val = "28" },
                 new Color { Val = BLACK }
             );
-            if (part.IsBold) rpr.Append(new Bold());
+            if (part.IsBold)   rpr.Append(new Bold());
             if (part.IsItalic) rpr.Append(new Italic());
             para.Append(new Run(rpr, new Text(part.Text) { Space = SpaceProcessingModeValues.Preserve }));
         }
-
         return para;
     }
 
@@ -383,60 +515,39 @@ class Program
     {
         var parts = new List<TextPart>();
         int i = 0;
-
         while (i < text.Length)
         {
             if (i + 1 < text.Length && text[i] == '*' && text[i + 1] == '*')
             {
                 int end = text.IndexOf("**", i + 2);
-                if (end > 0)
-                {
-                    parts.Add(new TextPart { Text = text.Substring(i + 2, end - i - 2), IsBold = true });
-                    i = end + 2;
-                    continue;
-                }
+                if (end > 0) { parts.Add(new TextPart { Text = text.Substring(i + 2, end - i - 2), IsBold = true }); i = end + 2; continue; }
             }
             if (text[i] == '*')
             {
                 int end = text.IndexOf('*', i + 1);
-                if (end > 0)
-                {
-                    parts.Add(new TextPart { Text = text.Substring(i + 1, end - i - 1), IsItalic = true });
-                    i = end + 1;
-                    continue;
-                }
+                if (end > 0) { parts.Add(new TextPart { Text = text.Substring(i + 1, end - i - 1), IsItalic = true }); i = end + 1; continue; }
             }
-
             int nextSpecial = int.MaxValue;
-            int boldPos = text.IndexOf("**", i);
-            int italicPos = text.IndexOf('*', i);
-            if (boldPos >= 0) nextSpecial = Math.Min(nextSpecial, boldPos);
+            int boldPos   = text.IndexOf("**", i);
+            int italicPos = text.IndexOf('*',  i);
+            if (boldPos   >= 0) nextSpecial = Math.Min(nextSpecial, boldPos);
             if (italicPos >= 0) nextSpecial = Math.Min(nextSpecial, italicPos);
-
-            if (nextSpecial == int.MaxValue)
-            {
-                parts.Add(new TextPart { Text = text.Substring(i) });
-                break;
-            }
-            else
-            {
-                parts.Add(new TextPart { Text = text.Substring(i, nextSpecial - i) });
-                i = nextSpecial;
-            }
+            if (nextSpecial == int.MaxValue) { parts.Add(new TextPart { Text = text.Substring(i) }); break; }
+            parts.Add(new TextPart { Text = text.Substring(i, nextSpecial - i) });
+            i = nextSpecial;
         }
-
         if (parts.Count == 0) parts.Add(new TextPart { Text = text });
         return parts;
     }
 
     // =========================================================================
-    // 图片 + 题注（SEQ 域）+ 黑色边框 0.75磅
+    // 图片 + 题注
     // =========================================================================
     static void AddImageWithCaption(Body body, MainDocumentPart mainPart, string imagePath, string caption)
     {
         if (!File.Exists(imagePath))
         {
-            Console.WriteLine($"Warning: Image not found: {imagePath}");
+            Console.Error.WriteLine($"Warning: Image not found: {imagePath}");
             body.Append(new Paragraph(
                 new ParagraphProperties(new Justification { Val = JustificationValues.Center }),
                 new Run(
@@ -448,14 +559,11 @@ class Program
         }
 
         _figCounter++;
-
-        // 添加 ImagePart
         var imagePart = mainPart.AddImagePart(ImagePartType.Png);
         byte[] imageBytes = File.ReadAllBytes(imagePath);
         using (var ms = new MemoryStream(imageBytes)) imagePart.FeedData(ms);
         var imageId = mainPart.GetIdOfPart(imagePart);
 
-        // 读取 PNG 尺寸
         int imgWidth, imgHeight;
         using (var ms = new MemoryStream(imageBytes))
         {
@@ -463,20 +571,16 @@ class Program
             byte[] wb = new byte[4], hb = new byte[4];
             ms.Read(wb, 0, 4); ms.Read(hb, 0, 4);
             if (BitConverter.IsLittleEndian) { Array.Reverse(wb); Array.Reverse(hb); }
-            imgWidth = BitConverter.ToInt32(wb, 0);
+            imgWidth  = BitConverter.ToInt32(wb, 0);
             imgHeight = BitConverter.ToInt32(hb, 0);
         }
 
-        // 计算尺寸（最大宽度 15cm）
         long maxWidthEmu = 15 * 360000L;
         long cx = maxWidthEmu;
         long cy = (long)(cx * ((double)imgHeight / imgWidth));
         uint prId = _docPrId++;
+        long borderWidth = 9525; // 0.75pt
 
-        // 0.75磅 = 9525 EMU (1磅 = 12700 EMU)
-        long borderWidth = 9525;
-
-        // 创建带黑色边框的图片 (分步构造避免括号嵌套)
         var shapeProps = new PIC.ShapeProperties(
             new A.Transform2D(new A.Offset { X = 0, Y = 0 }, new A.Extents { Cx = cx, Cy = cy }),
             new A.PresetGeometry { Preset = A.ShapeTypeValues.Rectangle },
@@ -491,103 +595,66 @@ class Program
             shapeProps
         );
 
-        var graphicData = new A.GraphicData(picture)
-        { Uri = "http://schemas.openxmlformats.org/drawingml/2006/picture" };
-
-        var graphic = new A.Graphic(graphicData);
-
         var inline = new DW.Inline(
             new DW.Extent { Cx = cx, Cy = cy },
-            // 修复：EffectExtent 设为边框宽度，防止顶部等边框被裁剪
             new DW.EffectExtent { LeftEdge = borderWidth, TopEdge = borderWidth, RightEdge = borderWidth, BottomEdge = borderWidth },
             new DW.DocProperties { Id = prId, Name = $"Fig{_figCounter}" },
             new DW.NonVisualGraphicFrameDrawingProperties(new A.GraphicFrameLocks { NoChangeAspect = true }),
-            graphic
-        )
-        { DistanceFromTop = 0, DistanceFromBottom = 0, DistanceFromLeft = 0, DistanceFromRight = 0 };
+            new A.Graphic(new A.GraphicData(picture) { Uri = "http://schemas.openxmlformats.org/drawingml/2006/picture" })
+        ) { DistanceFromTop = 0, DistanceFromBottom = 0, DistanceFromLeft = 0, DistanceFromRight = 0 };
 
-        var drawing = new Drawing(inline);
-
-        // 图片段落（居中，段前段后0磅）
         body.Append(new Paragraph(
             new ParagraphProperties(
                 new KeepNext(),
                 new Justification { Val = JustificationValues.Center },
                 new SpacingBetweenLines { Before = "0", After = "0" }
             ),
-            new Run(drawing)));
+            new Run(new Drawing(inline))));
 
-        // 题注（SEQ 域）
-        var capPara = new Paragraph(
-            new ParagraphProperties(new ParagraphStyleId { Val = "Caption" })
-        );
-
+        var capPara = new Paragraph(new ParagraphProperties(new ParagraphStyleId { Val = "Caption" }));
         capPara.Append(new Run(
             new RunProperties(new RunFonts { Ascii = "黑体", HighAnsi = "黑体", EastAsia = "黑体", ComplexScript = "黑体" }),
             new Text("图 ") { Space = SpaceProcessingModeValues.Preserve }
         ));
-
         capPara.Append(new Run(new FieldChar { FieldCharType = FieldCharValues.Begin }));
         capPara.Append(new Run(new FieldCode(" SEQ 图 \\* ARABIC ") { Space = SpaceProcessingModeValues.Preserve }));
         capPara.Append(new Run(new FieldChar { FieldCharType = FieldCharValues.Separate }));
         capPara.Append(new Run(new Text(_figCounter.ToString())));
         capPara.Append(new Run(new FieldChar { FieldCharType = FieldCharValues.End }));
-
         capPara.Append(new Run(
             new RunProperties(new RunFonts { Ascii = "黑体", HighAnsi = "黑体", EastAsia = "黑体", ComplexScript = "黑体" }),
             new Text($" {caption}") { Space = SpaceProcessingModeValues.Preserve }
         ));
-
-        // 添加 _GoBack 书签（兼容 nre.docx 交叉引用）
         var goBackId = (++_bookmarkId).ToString();
         capPara.Append(new BookmarkStart { Id = goBackId, Name = "_GoBack" });
         capPara.Append(new BookmarkEnd { Id = goBackId });
-
         body.Append(capPara);
     }
 
     // =========================================================================
-    // 表格题注（SEQ 域）
+    // 表格题注
     // =========================================================================
     static void AppendTableCaption(Body body, string captionText)
     {
         _tableCounter++;
-
-        var capPara = new Paragraph(
-            new ParagraphProperties(new ParagraphStyleId { Val = "Caption" })
-        );
-
-        // "表 "
+        var capPara = new Paragraph(new ParagraphProperties(new ParagraphStyleId { Val = "Caption" }));
         capPara.Append(new Run(
-            new RunProperties(
-                new RunFonts { Ascii = "黑体", HighAnsi = "黑体", EastAsia = "黑体", ComplexScript = "黑体" }
-            ),
+            new RunProperties(new RunFonts { Ascii = "黑体", HighAnsi = "黑体", EastAsia = "黑体", ComplexScript = "黑体" }),
             new Text("表 ") { Space = SpaceProcessingModeValues.Preserve }
         ));
-
-        // SEQ 自动编号域
         capPara.Append(new Run(new FieldChar { FieldCharType = FieldCharValues.Begin }));
         capPara.Append(new Run(new FieldCode(" SEQ 表 \\* ARABIC ") { Space = SpaceProcessingModeValues.Preserve }));
         capPara.Append(new Run(new FieldChar { FieldCharType = FieldCharValues.Separate }));
         capPara.Append(new Run(new Text(_tableCounter.ToString())));
         capPara.Append(new Run(new FieldChar { FieldCharType = FieldCharValues.End }));
-
-        // 可选说明文字
         if (!string.IsNullOrWhiteSpace(captionText))
-        {
             capPara.Append(new Run(
-                new RunProperties(
-                    new RunFonts { Ascii = "黑体", HighAnsi = "黑体", EastAsia = "黑体", ComplexScript = "黑体" }
-                ),
+                new RunProperties(new RunFonts { Ascii = "黑体", HighAnsi = "黑体", EastAsia = "黑体", ComplexScript = "黑体" }),
                 new Text($" {captionText}") { Space = SpaceProcessingModeValues.Preserve }
             ));
-        }
-
-        // 添加 _GoBack 书签（兼容 nre.docx 交叉引用）
         var goBackId = (++_bookmarkId).ToString();
         capPara.Append(new BookmarkStart { Id = goBackId, Name = "_GoBack" });
         capPara.Append(new BookmarkEnd { Id = goBackId });
-
         body.Append(capPara);
     }
 
@@ -596,17 +663,12 @@ class Program
     // =========================================================================
     static void ParseTable(Body body, string[] lines, int startIdx, out int endIdx)
     {
-        var headerLine = lines[startIdx].Trim();
-        var headers = ParseTableRow(headerLine);
-
+        var headers  = ParseTableRow(lines[startIdx].Trim());
         int dataStart = startIdx + 2;
         var rows = new List<string[]>();
         int i = dataStart;
         while (i < lines.Length && lines[i].Trim().StartsWith("|"))
-        {
-            rows.Add(ParseTableRow(lines[i].Trim()));
-            i++;
-        }
+            rows.Add(ParseTableRow(lines[i++].Trim()));
 
         var table = new Table();
         table.Append(new TableProperties(
@@ -615,109 +677,73 @@ class Program
             new TableJustification { Val = TableRowAlignmentValues.Center }
         ));
 
-        var grid = new TableGrid();
         int colCount = headers.Length;
         int colWidth = 9000 / colCount;
-        for (int c = 0; c < colCount; c++)
-            grid.Append(new GridColumn { Width = colWidth.ToString() });
+        var grid = new TableGrid();
+        for (int c = 0; c < colCount; c++) grid.Append(new GridColumn { Width = colWidth.ToString() });
         table.Append(grid);
 
-        // 表头行
+        // 表头
         var headerRow = new TableRow();
         headerRow.Append(new TableRowProperties(new TableHeader()));
         foreach (var h in headers)
-        {
-            headerRow.Append(new TableCell(
-                new TableCellProperties(
-                    new TableCellWidth { Width = colWidth.ToString(), Type = TableWidthUnitValues.Dxa },
-                    // new Shading { Val = ShadingPatternValues.Clear, Fill = "000000" },
-                    new TableCellVerticalAlignment { Val = TableVerticalAlignmentValues.Center }
-                ),
-                new Paragraph(
-                    new ParagraphProperties(
-                        new Justification { Val = JustificationValues.Center },
-                        new Indentation { FirstLine = "0" }
-                    ),
-                    new Run(
-                        new RunProperties(
-                            // new Bold(),  加粗
-                            new RunFonts { Ascii = "仿宋", HighAnsi = "仿宋", EastAsia = "仿宋", ComplexScript = "仿宋" },
-                            new FontSize { Val = "28" }
-                        ),
-                        new Text(h.Trim())
-                    )
-                )
-            ));
-        }
+            headerRow.Append(MakeCell(h.Trim(), colWidth, isHeader: true));
         table.Append(headerRow);
 
         // 数据行
-        bool altBg = false;
         foreach (var rowData in rows)
         {
             var dataRow = new TableRow();
             for (int c = 0; c < colCount; c++)
-            {
-                var cellProps = new TableCellProperties(
-                    new TableCellWidth { Width = colWidth.ToString(), Type = TableWidthUnitValues.Dxa }
-                );
-                // if (altBg)
-                //     cellProps.Append(new Shading { Val = ShadingPatternValues.Clear, Fill = "F5F5F5" });
-
-                dataRow.Append(new TableCell(
-                    cellProps,
-                    new Paragraph(
-                        new ParagraphProperties(
-                            new Justification { Val = JustificationValues.Center },
-                            new Indentation { FirstLine = "0" }
-                        ),
-                        new Run(
-                            new RunProperties(
-                                new RunFonts { Ascii = "仿宋", HighAnsi = "仿宋", EastAsia = "仿宋", ComplexScript = "仿宋" },
-                                new FontSize { Val = "28" },
-                                new Color { Val = BLACK }
-                            ),
-                            new Text(c < rowData.Length ? rowData[c].Trim() : "")
-                        )
-                    )
-                ));
-            }
+                dataRow.Append(MakeCell(c < rowData.Length ? rowData[c].Trim() : "", colWidth));
             table.Append(dataRow);
-            altBg = !altBg;
         }
 
         body.Append(table);
         endIdx = i;
     }
 
+    static TableCell MakeCell(string text, int colWidth, bool isHeader = false)
+    {
+        return new TableCell(
+            new TableCellProperties(
+                new TableCellWidth { Width = colWidth.ToString(), Type = TableWidthUnitValues.Dxa },
+                new TableCellVerticalAlignment { Val = TableVerticalAlignmentValues.Center }
+            ),
+            new Paragraph(
+                new ParagraphProperties(
+                    new Justification { Val = JustificationValues.Center },
+                    new Indentation { FirstLine = "0" }
+                ),
+                new Run(
+                    new RunProperties(
+                        new RunFonts { Ascii = "仿宋", HighAnsi = "仿宋", EastAsia = "仿宋", ComplexScript = "仿宋" },
+                        new FontSize { Val = "28" },
+                        new Color { Val = BLACK }
+                    ),
+                    new Text(text)
+                )
+            )
+        );
+    }
+
     static string[] ParseTableRow(string line)
     {
         var inner = line.Trim();
         if (inner.StartsWith("|")) inner = inner.Substring(1);
-        if (inner.EndsWith("|")) inner = inner.Substring(0, inner.Length - 1);
+        if (inner.EndsWith("|"))   inner = inner.Substring(0, inner.Length - 1);
         return inner.Split('|');
     }
 
     // =========================================================================
-    // 辅助结构
+    // 辅助类型
     // =========================================================================
-    class TextPart
-    {
-        public string Text = "";
-        public bool IsBold;
-        public bool IsItalic;
-    }
-
-    class ImageInfo
-    {
-        public string Alt = "";
-        public string Path = "";
-    }
+    class TextPart { public string Text = ""; public bool IsBold; public bool IsItalic; }
+    class ImageInfo  { public string Alt = ""; public string Path = ""; }
 
     static ImageInfo? ParseImageTag(string line)
     {
-        var match = Regex.Match(line, @"!\[(.*?)\]\((.*?)\)");
-        if (!match.Success) return null;
-        return new ImageInfo { Alt = match.Groups[1].Value, Path = match.Groups[2].Value };
+        var m = Regex.Match(line, @"!\[(.*?)\]\((.*?)\)");
+        return m.Success ? new ImageInfo { Alt = m.Groups[1].Value, Path = m.Groups[2].Value } : null;
     }
 }
