@@ -26,6 +26,7 @@ class Program
 
     private static uint _docPrId = 1;
     private static int _figCounter = 0;
+    private static int _tableCounter = 0;
     private static int _bookmarkId = 0;
 
     static void Main(string[] args)
@@ -308,7 +309,22 @@ class Program
             // 表格
             if (trimmed.StartsWith("|") && i + 1 < lines.Length && lines[i + 1].Trim().Contains("|-"))
             {
-                i = ParseTable(body, lines, i);
+                ParseTable(body, lines, i, out int endIdx);
+                i = endIdx;
+
+                // 检测紧跟表格后的可选题注行，格式：[表格说明文字]
+                string tableCaption = "";
+                if (i < lines.Length)
+                {
+                    var nextLine = lines[i].Trim();
+                    var capMatch = Regex.Match(nextLine, @"^\[(.+)\]$");
+                    if (capMatch.Success)
+                    {
+                        tableCaption = capMatch.Groups[1].Value;
+                        i++;
+                    }
+                }
+                AppendTableCaption(body, tableCaption);
                 continue;
             }
 
@@ -483,6 +499,7 @@ class Program
 
         var inline = new DW.Inline(
             new DW.Extent { Cx = cx, Cy = cy },
+            // 修复：EffectExtent 设为边框宽度，防止顶部等边框被裁剪
             new DW.EffectExtent { LeftEdge = borderWidth, TopEdge = borderWidth, RightEdge = borderWidth, BottomEdge = borderWidth },
             new DW.DocProperties { Id = prId, Name = $"Fig{_figCounter}" },
             new DW.NonVisualGraphicFrameDrawingProperties(new A.GraphicFrameLocks { NoChangeAspect = true }),
@@ -525,9 +542,49 @@ class Program
     }
 
     // =========================================================================
+    // 表格题注（SEQ 域）
+    // =========================================================================
+    static void AppendTableCaption(Body body, string captionText)
+    {
+        _tableCounter++;
+
+        var capPara = new Paragraph(
+            new ParagraphProperties(new ParagraphStyleId { Val = "Caption" })
+        );
+
+        // "表 "
+        capPara.Append(new Run(
+            new RunProperties(
+                new RunFonts { Ascii = "黑体", HighAnsi = "黑体", EastAsia = "黑体", ComplexScript = "黑体" }
+            ),
+            new Text("表 ") { Space = SpaceProcessingModeValues.Preserve }
+        ));
+
+        // SEQ 自动编号域
+        capPara.Append(new Run(new FieldChar { FieldCharType = FieldCharValues.Begin }));
+        capPara.Append(new Run(new FieldCode(" SEQ Table \\* ARABIC ") { Space = SpaceProcessingModeValues.Preserve }));
+        capPara.Append(new Run(new FieldChar { FieldCharType = FieldCharValues.Separate }));
+        capPara.Append(new Run(new Text(_tableCounter.ToString())));
+        capPara.Append(new Run(new FieldChar { FieldCharType = FieldCharValues.End }));
+
+        // 可选说明文字
+        if (!string.IsNullOrWhiteSpace(captionText))
+        {
+            capPara.Append(new Run(
+                new RunProperties(
+                    new RunFonts { Ascii = "黑体", HighAnsi = "黑体", EastAsia = "黑体", ComplexScript = "黑体" }
+                ),
+                new Text($" - {captionText}") { Space = SpaceProcessingModeValues.Preserve }
+            ));
+        }
+
+        body.Append(capPara);
+    }
+
+    // =========================================================================
     // 表格解析
     // =========================================================================
-    static int ParseTable(Body body, string[] lines, int startIdx)
+    static void ParseTable(Body body, string[] lines, int startIdx, out int endIdx)
     {
         var headerLine = lines[startIdx].Trim();
         var headers = ParseTableRow(headerLine);
@@ -621,7 +678,7 @@ class Program
         }
 
         body.Append(table);
-        return i;
+        endIdx = i;
     }
 
     static string[] ParseTableRow(string line)
