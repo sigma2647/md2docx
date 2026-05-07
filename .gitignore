@@ -4,3 +4,4 @@ obj/
 *.docx#
 *.docx
 /input.md
+.worktrees/
