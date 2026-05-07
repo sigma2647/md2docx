@@ -441,7 +441,7 @@ class Program
                 var altM  = Regex.Match(line, @"alt=""([^""]*)""",      RegexOptions.IgnoreCase);
                 var zoomM = Regex.Match(line, @"zoom:\s*([\d.]+)%",     RegexOptions.IgnoreCase);
                 var widM  = Regex.Match(line, @"width=""(\d+)""",       RegexOptions.IgnoreCase);
-                var widMm = Regex.Match(line, @"width=""(\d+)mm""",    RegexOptions.IgnoreCase);
+                var widMm = Regex.Match(line, @"width=""(\d+)mm""",     RegexOptions.IgnoreCase);
 
                 ImageScale scale;
                 if (zoomM.Success)
