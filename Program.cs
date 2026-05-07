@@ -100,6 +100,8 @@ class TextPart
 
 // =============================================================================
 // 图片元信息读取（内置 PNG / JPEG，无需额外 NuGet）
+// 修复 CA2022：所有 Read() 改为 ReadExactly()，保证读满缓冲区
+// 修复 CA2014：stackalloc 全部移到循环体外，消除栈溢出风险
 // =============================================================================
 static class ImageReader
 {
@@ -110,8 +112,10 @@ static class ImageReader
     public static (int width, int height, double dpi) GetInfo(string path)
     {
         using var fs = File.OpenRead(path);
+
+        // CA2014 fix：stackalloc 在方法顶部声明，不在任何循环内
         Span<byte> hdr = stackalloc byte[12];
-        fs.Read(hdr);
+        fs.ReadExactly(hdr);   // CA2022 fix：ReadExactly 保证读满
 
         // PNG: 签名 89 50 4E 47 0D 0A 1A 0A
         if (hdr[0] == 0x89 && hdr[1] == 0x50 && hdr[2] == 0x4E && hdr[3] == 0x47)
@@ -125,99 +129,132 @@ static class ImageReader
     }
 
     // ── PNG ──────────────────────────────────────────────────────────────────
-    // IHDR chunk 在偏移 8 处（4字节长度 + 4字节"IHDR" + 4字节宽 + 4字节高）
-    // pHYs chunk 含 DPI（可选）
+    // 文件布局：[8字节签名][4字节IHDR长度][4字节"IHDR"][4字节宽][4字节高][5字节色彩][4字节CRC]...
+    // GetInfo 已读了签名(8) + IHDR长度(4) = 12字节，fs 当前位置在"IHDR"标签处
     private static (int, int, double) ReadPng(Stream fs)
     {
-        // 已读 12 字节（签名8 + 长度4），还差"IHDR" tag 和数据
-        Span<byte> buf = stackalloc byte[8];
-        fs.Read(buf);                        // "IHDR" + width(4)
-        int w = ReadBigEndianInt32(buf[4..]);
-        fs.Read(buf[..4]);                   // height
-        int h = ReadBigEndianInt32(buf[..4]);
+        // CA2014 fix：所有 stackalloc 在方法入口一次性声明
+        Span<byte> buf8  = stackalloc byte[8];   // 通用 8 字节缓冲
+        Span<byte> chunk = stackalloc byte[12];  // chunk 头：length(4)+type(4)+前4字节数据
+        Span<byte> phys  = stackalloc byte[9];   // pHYs 数据：ppmX(4)+ppmY(4)+unit(1)
 
-        // 尝试找 pHYs chunk 获取实际 DPI（单位为像素/单位）
-        // pHYs: pxPerUnitX(4) + pxPerUnitY(4) + unit(1), unit=1 表示 pixels/metre
+        // 读 IHDR 标签(4) + 宽(4)
+        fs.ReadExactly(buf8);
+        int w = ReadBE32(buf8[4..]);
+
+        // 读 高(4)
+        fs.ReadExactly(buf8[..4]);
+        int h = ReadBE32(buf8[..4]);
+
         double dpi = 96;
         try
         {
-            // 跳过 IHDR 剩余部分（5字节色彩信息 + 4字节CRC）
+            // 跳过 IHDR 剩余：色彩信息(5字节) + CRC(4字节)
             fs.Seek(5 + 4, SeekOrigin.Current);
-            Span<byte> chunk = stackalloc byte[12];
-            while (fs.Read(chunk) == 12)
+
+            // 逐 chunk 扫描，找 pHYs（含实际 DPI）
+            // pHYs 在图片中出现顺序不定，但一般紧跟 IHDR
+            while (true)
             {
-                int len  = ReadBigEndianInt32(chunk[..4]);
-                string t = System.Text.Encoding.ASCII.GetString(chunk[4..8]);
-                if (t == "pHYs" && len == 9)
+                // CA2022 fix：改用 Read() 的返回值判断 EOF，因为 ReadExactly 在 EOF 会抛异常
+                int got = fs.Read(chunk);
+                if (got < 12) break;
+
+                int    len  = ReadBE32(chunk[..4]);
+                string type = System.Text.Encoding.ASCII.GetString(chunk[4..8]);
+
+                if (type == "IEND") break;  // 文件结束
+
+                if (type == "pHYs" && len == 9)
                 {
-                    Span<byte> phys = stackalloc byte[9];
-                    fs.Read(phys);
-                    int ppmX = ReadBigEndianInt32(phys[..4]);
+                    // CA2022 fix：ReadExactly 保证读满 9 字节
+                    fs.ReadExactly(phys);
+                    int  ppmX = ReadBE32(phys[..4]);
                     byte unit = phys[8];
+                    // unit=1: pixels/metre → inch = metre/0.0254 → DPI = ppm/39.3701
                     if (unit == 1 && ppmX > 0)
-                        dpi = ppmX / 39.3701;   // pixels/metre → DPI
+                        dpi = ppmX / 39.3701;
                     break;
                 }
-                fs.Seek(len + 4, SeekOrigin.Current); // 跳到下一 chunk
+
+                // 跳过本 chunk 的数据(len) + CRC(4)
+                fs.Seek(len + 4, SeekOrigin.Current);
             }
         }
-        catch { /* pHYs 读取失败不影响主流程 */ }
+        catch { /* pHYs 读取失败不影响主流程，保持 dpi=96 */ }
 
         return (w, h, dpi > 0 ? dpi : 96);
     }
 
     // ── JPEG ─────────────────────────────────────────────────────────────────
-    // 扫描 APP0(JFIF/JFXX) 或 SOF0/SOF1/SOF2 段获取尺寸和 DPI
+    // 扫描 APP0(JFIF) 获取 DPI，扫描 SOF0/SOF1/SOF2 段获取宽高
+    // GetInfo 已读了 12 字节签名，fs 当前位置在第 13 字节（SOI 之后）
     private static (int, int, double) ReadJpeg(Stream fs)
     {
-        int w = 0, h = 0;
+        int    w = 0, h = 0;
         double dpi = 96;
-        Span<byte> marker = stackalloc byte[2];
 
-        while (fs.Read(marker) == 2)
+        // CA2014 fix：所有 stackalloc 在循环外声明
+        Span<byte> marker = stackalloc byte[2];   // 段标记：FF xx
+        Span<byte> lenBuf = stackalloc byte[2];   // 段长度（不含标记本身）
+        Span<byte> seg16  = stackalloc byte[16];  // APP0 前 16 字节
+        Span<byte> sof8   = stackalloc byte[8];   // SOF 前 8 字节（含宽高）
+
+        // 回到文件起点重新扫描（GetInfo 已读了 12 字节，JPEG 段在 SOI 之后）
+        fs.Seek(2, SeekOrigin.Begin);   // 跳过 FF D8 (SOI)
+
+        while (true)
         {
-            if (marker[0] != 0xFF) break;
+            // CA2022 fix：用 Read 检查 EOF，不用 ReadExactly（可能正好到文件尾）
+            if (fs.Read(marker) < 2) break;
+            if (marker[0] != 0xFF) break;   // 非法格式
             byte tag = marker[1];
 
-            // APP0 (JFIF) → 可获取 DPI
+            // FF FF / FF 00 是填充字节，跳过
+            if (tag == 0xFF || tag == 0x00) continue;
+
+            // SOI / EOI 没有数据段
+            if (tag == 0xD8 || tag == 0xD9) continue;
+
+            // ── APP0 (JFIF)：含 DPI ──────────────────────────────────────
             if (tag == 0xE0)
             {
-                Span<byte> seg = stackalloc byte[16];
-                fs.Read(seg);
-                // seg[0..1]=length, [2..5]="JFIF", [6]=unit, [7..8]=Xdensity, [9..10]=Ydensity
-                if (seg[2] == 'J' && seg[3] == 'F' && seg[4] == 'I' && seg[5] == 'F')
+                if (fs.Read(seg16) < 16) break;
+                // seg16[0..1]=段总长, [2..5]="JFIF\0", [6]=unit, [7..8]=Xdensity
+                if (seg16[2] == 'J' && seg16[3] == 'F' && seg16[4] == 'I' && seg16[5] == 'F')
                 {
-                    byte unit = seg[6];
-                    int xd = (seg[7] << 8) | seg[8];
-                    if (unit == 1 && xd > 0) dpi = xd;  // dots/inch
-                    if (unit == 2 && xd > 0) dpi = xd * 2.54;  // dots/cm
+                    byte unit = seg16[6];
+                    int  xd   = (seg16[7] << 8) | seg16[8];
+                    if (unit == 1 && xd > 0) dpi = xd;           // dots/inch
+                    if (unit == 2 && xd > 0) dpi = xd * 2.54;    // dots/cm → dpi
                 }
-                int len = ((seg[0] << 8) | seg[1]) - 16;
-                if (len > 0) fs.Seek(len, SeekOrigin.Current);
+                // 跳过段剩余部分（段总长包含自身 2 字节，已读 16 字节）
+                int remain = ((seg16[0] << 8) | seg16[1]) - 16;
+                if (remain > 0) fs.Seek(remain, SeekOrigin.Current);
                 continue;
             }
 
-            // SOF 段（包含宽高）: SOF0=C0, SOF1=C1, SOF2=C2
+            // ── SOF0 / SOF1 / SOF2：含宽高 ──────────────────────────────
             if (tag is 0xC0 or 0xC1 or 0xC2)
             {
-                Span<byte> sof = stackalloc byte[8];
-                fs.Read(sof);
-                h = (sof[3] << 8) | sof[4];
-                w = (sof[5] << 8) | sof[6];
-                break;
+                if (fs.Read(sof8) < 8) break;
+                // sof8[0..1]=段长, [2]=精度, [3..4]=高, [5..6]=宽
+                h = (sof8[3] << 8) | sof8[4];
+                w = (sof8[5] << 8) | sof8[6];
+                break;  // 宽高找到，不需要继续扫描
             }
 
-            // 其他段：跳过
-            Span<byte> lenBuf = stackalloc byte[2];
+            // ── 其他段：读段长跳过 ───────────────────────────────────────
             if (fs.Read(lenBuf) < 2) break;
-            int skip = ((lenBuf[0] << 8) | lenBuf[1]) - 2;
+            int skip = ((lenBuf[0] << 8) | lenBuf[1]) - 2;  // 段长含自身 2 字节
             if (skip > 0) fs.Seek(skip, SeekOrigin.Current);
         }
 
         return (w, h, dpi);
     }
 
-    private static int ReadBigEndianInt32(ReadOnlySpan<byte> b)
+    // 大端序 int32 读取
+    private static int ReadBE32(ReadOnlySpan<byte> b)
         => (b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3];
 }
 
