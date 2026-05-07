@@ -4,9 +4,30 @@
 #   make install    # 单文件自包含发布并安装到 ~/.local/bin
 #   make clean      # 清理构建产物
 
+# ===== 平台自动检测 =====
+UNAME_S := $(shell uname -s)
+UNAME_M := $(shell uname -m)
+
+# 解析架构
+ifeq ($(UNAME_M),x86_64)
+    ARCH := x64
+else ifeq ($(UNAME_M),arm64)
+    ARCH := arm64
+else
+    ARCH := $(UNAME_M)
+endif
+
+# RID 自动映射
+ifeq ($(UNAME_S),Linux)
+    RID := linux-$(ARCH)
+else ifeq ($(UNAME_S),Darwin)
+    RID := osx-$(ARCH)
+else
+    RID := win-$(ARCH)
+endif
+
 PROJECT      := md2docx
 CONFIG       := Release
-RID          := linux-x64
 PUBLISH_DIR  := bin/$(CONFIG)/net10.0/$(RID)/publish
 INSTALL_DIR  := $(HOME)/.local/bin
 EXECUTABLE   := $(PUBLISH_DIR)/$(PROJECT)
