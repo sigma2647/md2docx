@@ -283,28 +283,41 @@ class Program
     // =========================================================================
     static int Main(string[] args)
     {
-        var inputArg = new Argument<string?>(
-            "input.md",
-            () => null,
-            "Input Markdown file. Omit to read from stdin.");
+        var inputArg = new Argument<string?>("input.md")
+        {
+            Description = "Input Markdown file. Omit to read from stdin.",
+            Arity = ArgumentArity.ZeroOrOne
+        };
 
-        var outputOpt = new Option<string?>(
-            new[] { "-o", "--output" },
-            "Output .docx path.");
+        var outputOpt = new Option<string?>("--output", "-o")
+        {
+            Description = "Output .docx path."
+        };
 
-        var baseDirOpt = new Option<string?>(
-            "--base-dir",
-            "Base directory for resolving image paths.");
+        var baseDirOpt = new Option<string?>("--base-dir")
+        {
+            Description = "Base directory for resolving image paths."
+        };
 
-        var forceOpt = new Option<bool>(
-            new[] { "-f", "--force" },
-            "Overwrite output file if it already exists.");
+        var forceOpt = new Option<bool>("--force", "-f")
+        {
+            Description = "Overwrite output file if it already exists."
+        };
 
         var root = new RootCommand($"md2docx v{VERSION} - Markdown to DOCX Converter")
             { inputArg, outputOpt, baseDirOpt, forceOpt };
 
-        root.SetHandler(Run, inputArg, outputOpt, baseDirOpt, forceOpt);
-        return root.Invoke(args);
+        root.SetAction(parseResult =>
+        {
+            var inputFile  = parseResult.GetValue(inputArg);
+            var outOpt     = parseResult.GetValue(outputOpt);
+            var baseDir    = parseResult.GetValue(baseDirOpt);
+            var force      = parseResult.GetValue(forceOpt);
+            Run(inputFile, outOpt, baseDir, force);
+            return 0;
+        });
+
+        return root.Parse(args).Invoke();
     }
 
     static void Run(string? inputFile, string? outputOpt, string? baseDirOpt, bool force)
