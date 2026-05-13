@@ -56,33 +56,20 @@ ParseMarkdown
 
 ## Build & Install
 
-### 方法 1：Makefile（推荐）
+### 方法 1：justfile（推荐）
 
 ```bash
 # 编译 + 安装到 ~/.local/bin
-make install
+just install
 
 # 仅快速编译（framework-dependent，开发调试用）
-make build
+just build
 
 # 清理构建产物
-make clean
+just clean
 ```
 
-### 方法 2：build.sh
-
-```bash
-# 编译 + 安装到 ~/.local/bin
-./build.sh install
-
-# 仅快速编译
-./build.sh build
-
-# 清理
-./build.sh clean
-```
-
-### 方法 3：手动命令
+### 方法 2：手动命令
 
 ```bash
 # 单文件自包含发布（产生唯一可执行文件，零依赖）

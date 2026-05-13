@@ -594,7 +594,8 @@ class Program
         body.Append(new Paragraph(
             new ParagraphProperties(
                 new Justification { Val = JustificationValues.Center },
-                new SpacingBetweenLines { Before = "0", After = "0" }
+                new SpacingBetweenLines { Before = "0", After = "0" },
+                new KeepNext()        // 图片段落粘住下面的图题，防止题注被推到下一页
             ),
             new Run(new Drawing(inline))));
 
@@ -735,14 +736,16 @@ class Program
         for (int c = 0; c < colCount; c++) grid.Append(new GridColumn { Width = colWidth.ToString() });
         table.Append(grid);
 
+        // 每行加 CantSplit：单行不允许跨页（行内文字不会被拦腰切开）
         var hRow = new TableRow();
-        hRow.Append(new TableRowProperties(new TableHeader()));
+        hRow.Append(new TableRowProperties(new TableHeader(), new CantSplit()));
         foreach (var h in headers) hRow.Append(MakeCell(h.Trim(), colWidth));
         table.Append(hRow);
 
         foreach (var row in rows)
         {
             var dRow = new TableRow();
+            dRow.Append(new TableRowProperties(new CantSplit()));
             for (int c = 0; c < colCount; c++)
                 dRow.Append(MakeCell(c < row.Length ? row[c].Trim() : "", colWidth));
             table.Append(dRow);
@@ -754,6 +757,8 @@ class Program
 
     static TableCell MakeCell(string text, int colWidth)
     {
+        // 单元格内段落加 KeepNext：让"表格 + 表题"作为整体不被分页拆开
+        // （副作用：若表格本身大于一页，Word 会强制把整表推到下一页）
         return new TableCell(
             new TableCellProperties(
                 new TableCellWidth { Width = colWidth.ToString(), Type = TableWidthUnitValues.Dxa },
@@ -761,7 +766,8 @@ class Program
             new Paragraph(
                 new ParagraphProperties(
                     new Justification { Val = JustificationValues.Center },
-                    new Indentation   { FirstLine = "0" }),
+                    new Indentation   { FirstLine = "0" },
+                    new KeepNext()),
                 new Run(
                     new RunProperties(
                         new RunFonts { Ascii = "仿宋", HighAnsi = "仿宋", EastAsia = "仿宋", ComplexScript = "仿宋" },

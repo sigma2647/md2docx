@@ -62,6 +62,17 @@ new DocGrid { Type = DocGridValues.Lines, LinePitch = 312 }
 ```
 参见 `AppendCaptionField`。这样后续手工插入图/表时，编号和我们生成的共用同一 Word 计数器，不会断裂。
 
+## 题注防跨页
+
+OOXML 没有"keepWithPrevious"——题注要粘住前面的图/表，必须给**前面的元素**加 `<w:keepNext/>`。
+我们的做法：
+
+- **图片段落**加 `KeepNext()` → 粘住下面的图题
+- **表格每行**加 `CantSplit()` → 单行不允许拦腰切开
+- **表格单元格内段落**加 `KeepNext()` → 整表 + 表题作为不可分组合
+
+**副作用**：表格本身大于一页时，Word 会把整表强推到下一页（可能造成空白）。本项目场景表格通常较小，可接受这个代价。如果遇到必然超长的表格，需要单独豁免 KeepNext。
+
 ## Word/WPS 二次保存的副作用（不是 bug）
 
 打开生成的 docx 又保存后会看到：
@@ -90,8 +101,8 @@ new DocGrid { Type = DocGridValues.Lines, LinePitch = 312 }
 ## Build
 
 ```bash
-make install   # 单文件自包含 → ~/.local/bin/md2docx
-make build     # 仅快速编译
+just install   # 单文件自包含 → ~/.local/bin/md2docx
+just build     # 仅快速编译
 ```
 
 依赖 `DocumentFormat.OpenXml` + `System.CommandLine`。
