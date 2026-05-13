@@ -268,10 +268,12 @@ class Program
     private const string BLACK   = "000000";
     private const string VERSION = "1.2.0";
 
-    // 页面可用宽度 = A4 宽 - 左右边距(各 1800 twip = 3.17cm)
-    // = 11906 - 3600 = 8306 twip → EMU = 8306 * 635 ≈ 5_274_310
-    // 保守取 15cm = 5_400_000 EMU（与原版一致）
-    private static readonly long PageWidthEmu = OpenXmlUnits.CmToEmu(15);
+    private const int LeftMargin  = 1800;
+    private const int RightMargin = 1800;
+
+    // 页面可用宽度 = (A4 宽 - 左右边距) twip → EMU
+    // 1 twip = 1/1440 inch；1 EMU = 1/914400 inch；故 1 twip = 635 EMU
+    private static readonly long PageWidthEmu = (A4W - LeftMargin - RightMargin) * 635L;
 
     private static uint _docPrId    = 1;
     private static int  _figCounter = 0;
@@ -357,7 +359,7 @@ class Program
 
         body.Append(new SectionProperties(
             new PageSize   { Width = (UInt32Value)(uint)A4W, Height = (UInt32Value)(uint)A4H },
-            new PageMargin { Top = 1440, Right = 1800, Bottom = 1440, Left = 1800, Header = 720, Footer = 720 },
+            new PageMargin { Top = 1440, Right = RightMargin, Bottom = 1440, Left = LeftMargin, Header = 720, Footer = 720 },
             new Columns    { Space = "425" },
             // 关键：中文文档必须有 docGrid，否则 WPS 渲染时段前段后不对称
             // （依赖字体 ascent/descent，黑体不对称会"塌顶"）。linePitch=312 对应单倍行距网格。
@@ -653,14 +655,13 @@ class Program
 
     static Paragraph CreateRichParagraph(string text)
     {
+        // run 里只放 hint=eastAsia（让 WPS 走东亚渲染路径）+ 内联格式（bold/italic）。
+        // 字体/字号/颜色由 BodyText 样式负责，run 不重复声明（避免双保险反模式）。
         var para = new Paragraph(
             new ParagraphProperties(new ParagraphStyleId { Val = "BodyText" }));
         foreach (var part in ParseInline(text))
         {
-            var rpr = new RunProperties(
-                new RunFonts { Ascii = "仿宋", HighAnsi = "仿宋", EastAsia = "仿宋", ComplexScript = "仿宋" },
-                new FontSize { Val = "28" }, new FontSizeComplexScript { Val = "28" },
-                new Color    { Val = BLACK });
+            var rpr = new RunProperties(new RunFonts { Hint = FontTypeHintValues.EastAsia });
             if (part.IsBold)   rpr.Append(new Bold());
             if (part.IsItalic) rpr.Append(new Italic());
             para.Append(new Run(rpr,
@@ -785,6 +786,20 @@ class Program
         var sp = mainPart.AddNewPart<StyleDefinitionsPart>();
         sp.Styles = new Styles();
 
+        // docDefaults：Word 中文版默认值。docx 显式带上，避免不同 Office/WPS 用本地
+        // normal.dotm 默认填补造成的跨机器渲染差异。
+        sp.Styles.Append(new DocDefaults(
+            new RunPropertiesDefault(
+                new RunPropertiesBaseStyle(
+                    new RunFonts {
+                        Ascii = "Times New Roman", HighAnsi = "Times New Roman",
+                        EastAsia = "宋体", ComplexScript = "Times New Roman" },
+                    new Kern { Val = (UInt32Value)2u },
+                    new FontSize { Val = "21" },          // 默认 10.5pt
+                    new FontSizeComplexScript { Val = "22" },
+                    new Languages { Val = "en-US", EastAsia = "zh-CN", Bidi = "ar-SA" })),
+            new ParagraphPropertiesDefault()));
+
         sp.Styles.Append(new Style(
             new StyleName { Val = "Normal" },
             new StyleParagraphProperties(
@@ -824,7 +839,7 @@ class Program
                 new WordWrap { Val = false },
                 new Indentation { FirstLineChars = 200, FirstLine = "200" },
                 new Justification { Val = JustificationValues.Both },
-                new SpacingBetweenLines { Before = "0", After = "0" }),
+                new SpacingBetweenLines { Before = "0", After = "0", Line = "360", LineRule = LineSpacingRuleValues.Auto }),
             new StyleRunProperties(
                 new RunFonts { Ascii = "仿宋", HighAnsi = "仿宋", EastAsia = "仿宋", ComplexScript = "仿宋" },
                 new FontSize { Val = "28" }, new FontSizeComplexScript { Val = "28" },
