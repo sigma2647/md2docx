@@ -357,7 +357,11 @@ class Program
 
         body.Append(new SectionProperties(
             new PageSize   { Width = (UInt32Value)(uint)A4W, Height = (UInt32Value)(uint)A4H },
-            new PageMargin { Top = 1440, Right = 1800, Bottom = 1440, Left = 1800, Header = 720, Footer = 720 }
+            new PageMargin { Top = 1440, Right = 1800, Bottom = 1440, Left = 1800, Header = 720, Footer = 720 },
+            new Columns    { Space = "425" },
+            // 关键：中文文档必须有 docGrid，否则 WPS 渲染时段前段后不对称
+            // （依赖字体 ascent/descent，黑体不对称会"塌顶"）。linePitch=312 对应单倍行距网格。
+            new DocGrid    { Type = DocGridValues.Lines, LinePitch = 312 }
         ));
 
         doc.Save();
