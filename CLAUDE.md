@@ -62,6 +62,23 @@ new DocGrid { Type = DocGridValues.Lines, LinePitch = 312 }
 ```
 参见 `AppendCaptionField`。这样后续手工插入图/表时，编号和我们生成的共用同一 Word 计数器，不会断裂。
 
+## 标题样式可见性：必须三件套
+
+**症状**：md 里只用 ## ###，docx 在 WPS"推荐的样式"画廊只显示用过的级别，H4/H5 看不到。
+
+**根因**：WPS 推荐画廊综合参考 `<w:latentStyles>` + 样式自身 `qFormat`。两者缺一不可。
+
+**必须三件套**（见 `AddStyles`）：
+
+1. 每个 Heading 加 `PrimaryStyle()` → `<w:qFormat/>`
+2. 每个 Heading 加 `UIPriority { Val = 9 }`
+3. styles.xml 顶部显式写 `<w:latentStyles>`，含 26 条 lsdException 白名单（heading 1–9 / Title / Subtitle / Strong / Emphasis / Quote 等），对齐 Word `normal.dotm` 出厂默认
+
+**反面教材**（都踩过）：
+
+- 只加 qFormat → H4/H5 仍不在推荐画廊
+- 加 latentStyles 但 lsdException 只白名单 heading → Title / Subtitle / Strong 等 Word 内置样式跟着消失（被 defSemiHidden=true 拦截）
+
 ## 题注防跨页
 
 OOXML 没有"keepWithPrevious"——题注要粘住前面的图/表，必须给**前面的元素**加 `<w:keepNext/>`。
@@ -80,7 +97,7 @@ OOXML 没有"keepWithPrevious"——题注要粘住前面的图/表，必须给*
 - styleId `"Heading1"` → `"1"`、`"Normal"` → `"a"`、`"BodyText"` → `"a3"`
 - 多出 `theme/`、`webSettings.xml`、`fontTable.xml`
 - 段落多出 `w14:paraId` `w:rsidR` 等 Word 跟踪 ID
-- styles.xml 顶部加 `<w:docDefaults>` 和 376 条 `<w:latentStyles>`
+- styles.xml 顶部的 `<w:latentStyles>` 从我们写的 26 条扩到 ~190 条（Word 把完整 normal.dotm lsdException 补齐）
 
 这些是 Word 在补齐它认为完整文档应有的元数据，**不影响样式渲染**。排查 C# 输出 bug 时，**用未经 Word 打开的原始 docx**，不要被这层污染迷惑。
 

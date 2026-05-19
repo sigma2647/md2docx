@@ -805,6 +805,51 @@ class Program
                     new Languages { Val = "en-US", EastAsia = "zh-CN", Bidi = "ar-SA" })),
             new ParagraphPropertiesDefault()));
 
+        // latentStyles：显式声明"未在 styles.xml 内联定义"的样式如何显示。
+        // 没有 latentStyles 时 WPS"推荐的样式"画廊用内置默认，未使用的 H4/H5 不会出现。
+        // 默认 defSemiHidden=true 会隐藏所有未列出的样式 —— 故必须把 Word 标准 qFormat 样式
+        // (Title/Subtitle/Strong/Emphasis/Quote 等) 一并 lsdException 白名单，否则它们会跟着消失。
+        // 下面列表对齐 Word normal.dotm 出厂默认。
+        var latent = new LatentStyles {
+            DefaultLockedState    = false,
+            DefaultUiPriority     = 99,
+            DefaultSemiHidden     = true,
+            DefaultUnhideWhenUsed = true,
+            DefaultPrimaryStyle   = false,
+            Count                 = 376,
+        };
+        // Normal 与 heading 1–9 (H6–9 在 Word 默认是 semiHidden+unhideWhenUsed)
+        latent.Append(new LatentStyleExceptionInfo {
+            Name = "Normal", UiPriority = 0, SemiHidden = false, UnhideWhenUsed = false, PrimaryStyle = true });
+        for (int hn = 1; hn <= 9; hn++)
+            latent.Append(new LatentStyleExceptionInfo {
+                Name = $"heading {hn}", UiPriority = 9,
+                SemiHidden = hn > 5, UnhideWhenUsed = hn > 5, PrimaryStyle = true });
+        // 常用 qFormat 样式 —— 与 Word 默认 normal.dotm 一致
+        (string Name, int Prio, bool QF)[] common = {
+            ("caption",            35, true),
+            ("Title",              10, true),
+            ("Subtitle",           11, true),
+            ("Strong",             22, true),
+            ("Emphasis",           20, true),
+            ("No Spacing",          1, true),
+            ("List Paragraph",     34, true),
+            ("Quote",              29, true),
+            ("Intense Quote",      30, true),
+            ("Subtle Emphasis",    19, true),
+            ("Intense Emphasis",   21, true),
+            ("Subtle Reference",   31, true),
+            ("Intense Reference",  32, true),
+            ("Book Title",         33, true),
+            ("TOC Heading",        39, true),
+        };
+        foreach (var (n, p, qf) in common)
+            latent.Append(new LatentStyleExceptionInfo {
+                Name = n, UiPriority = p, SemiHidden = false, UnhideWhenUsed = false, PrimaryStyle = qf });
+        // 非 qFormat 但常见的样式（Table Grid 等）—— 解除半隐藏让 WPS 样式列表可见
+        latent.Append(new LatentStyleExceptionInfo { Name = "Table Grid", UiPriority = 59, SemiHidden = false, UnhideWhenUsed = false });
+        sp.Styles.Append(latent);
+
         sp.Styles.Append(new Style(
             new StyleName { Val = "Normal" },
             new StyleParagraphProperties(
@@ -825,6 +870,9 @@ class Program
                 new StyleName { Val = name },
                 new BasedOn { Val = "Normal" },
                 new NextParagraphStyle { Val = "Normal" },
+                new UIPriority { Val = 9 },                   // 与 latentStyles lsdException 中 heading 的 uiPriority 一致
+                // qFormat：标记为"主要样式"，配合 latentStyles 让 H1–H5 始终出现在 WPS 推荐画廊
+                new PrimaryStyle(),
                 new StyleParagraphProperties(
                     new KeepNext(), new KeepLines(),
                     new SpacingBetweenLines { Before = "0", After = "0", Line = "360", LineRule = LineSpacingRuleValues.Auto },
