@@ -594,8 +594,7 @@ class Program
         body.Append(new Paragraph(
             new ParagraphProperties(
                 new Justification { Val = JustificationValues.Center },
-                new SpacingBetweenLines { Before = "0", After = "0" },
-                new KeepNext()        // 图片段落粘住下面的图题，防止题注被推到下一页
+                new SpacingBetweenLines { Before = "0", After = "0" }
             ),
             new Run(new Drawing(inline))));
 

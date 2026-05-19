@@ -67,7 +67,7 @@ new DocGrid { Type = DocGridValues.Lines, LinePitch = 312 }
 OOXML 没有"keepWithPrevious"——题注要粘住前面的图/表，必须给**前面的元素**加 `<w:keepNext/>`。
 我们的做法：
 
-- **图片段落**加 `KeepNext()` → 粘住下面的图题
+- **图片段落**不加 `KeepNext()` → 允许图片与图题被分到不同页（避免图片被强推到下一页造成大块空白）
 - **表格每行**加 `CantSplit()` → 单行不允许拦腰切开
 - **表格单元格内段落**加 `KeepNext()` → 整表 + 表题作为不可分组合
 
